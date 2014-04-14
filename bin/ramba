@@ -1,0 +1,49 @@
+#! /usr/bin/env ruby
+
+require 'httparty'
+require 'json'
+require 'colorize'
+
+@packages = {}
+
+def process_command
+  command = ARGV[0].strip.downcase.to_sym
+
+  case command
+  when :install
+    self.load_ramba_file
+    self.download_packages
+  end
+end
+
+def load_ramba_file
+  fn = "#{Dir.pwd}/Rambafile"
+  if File.exist?(fn)
+    require fn
+  else
+    puts "No Rambafile found in the current directory.".red
+    exit
+  end
+end
+
+def download_packages
+  @packages.each do |name, opts|
+    download_package(opts)
+  end
+end
+
+def download_package(opts)
+  # get bower config
+  repo_url = "https://raw.github.com/#{opts[:github]}/#{opts[:tag] || opts[:branch] || "master"}/bower.json"
+  bower_json = HTTParty.get(repo_url).parsed_response
+  puts bower_json
+end
+
+## DSL METHODS
+
+def package(name, opts={}, &block)
+  opts[:name] = name.to_s
+  @packages[name.to_s] = opts
+end
+
+process_command
