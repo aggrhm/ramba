@@ -221,7 +221,7 @@ end
 
 def build_javascript_manifest
   print "Building javascript manifest... ".yellow
-  man_fn = File.join(Dir.pwd, @assets_path, "javascripts", "ramba", "ramba.js")
+  man_fn = File.join(Dir.pwd, @assets_path, "javascripts", "ramba", "index.js")
   FileUtils.mkdir_p File.dirname(man_fn)
 
   str = "// Ramba Javascript Manifest\n"
@@ -242,7 +242,7 @@ end
 
 def build_stylesheet_manifest
   print "Building stylesheet manifest... ".yellow
-  man_fn = File.join(Dir.pwd, @assets_path, "stylesheets", "ramba", "ramba.css")
+  man_fn = File.join(Dir.pwd, @assets_path, "stylesheets", "ramba", "index.css")
   FileUtils.mkdir_p File.dirname(man_fn)
 
   str = "/* Ramba Stylesheet Manifest\n"
