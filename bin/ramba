@@ -3,47 +3,257 @@
 require 'httparty'
 require 'json'
 require 'colorize'
+require 'fileutils'
 
 @packages = {}
+@assets_path = "/app/assets"
+
+DEBUG = false
 
 def process_command
   command = ARGV[0].strip.downcase.to_sym
+  pkg_names = ARGV[1]
+  if pkg_names.nil?
+    pkgs = nil
+  else
+    pkgs = pkg_names.split(" ").collect{|pkg| pkg.strip.downcase}
+  end
+
+  load_asset_file
+  configure_packages
 
   case command
   when :install
-    self.load_ramba_file
-    self.download_packages
+    download_packages(pkgs)
+    build_javascript_manifest
+    build_stylesheet_manifest
+  when :manifests
+    build_javascript_manifest
+    build_stylesheet_manifest
   end
 end
 
-def load_ramba_file
-  fn = "#{Dir.pwd}/Rambafile"
+def load_asset_file
+  fn = "#{Dir.pwd}/Assetfile"
   if File.exist?(fn)
-    require fn
+    load fn
   else
-    puts "No Rambafile found in the current directory.".red
+    puts "No Assetfile found in the current directory.".red
     exit
   end
 end
 
-def download_packages
+def configure_packages
   @packages.each do |name, opts|
+    opts[:paths] = {}
+    opts[:paths][:javascripts] = File.join(Dir.pwd, @assets_path, "javascripts", "ramba", opts[:name])
+    opts[:paths][:stylesheets] = File.join(Dir.pwd, @assets_path, "stylesheets", "ramba", opts[:name])
+    opts[:paths][:images] = File.join(Dir.pwd, @assets_path, "images", "ramba", opts[:name])
+    opts[:paths][:fonts] = File.join(Dir.pwd, @assets_path, "fonts", "ramba", opts[:name])
+  end
+end
+
+def download_packages(pkgs=nil)
+  @packages.each do |name, opts|
+    next if pkgs && !pkgs.include?(name)
     download_package(opts)
+    return if DEBUG
   end
 end
 
 def download_package(opts)
+  puts "Installing #{opts[:name]}...".yellow
+  if opts[:github]
+    opts[:repo_url] = "https://raw.github.com/#{opts[:github]}/#{opts[:tag] || opts[:branch] || "master"}"
+    fetch_bower_config(opts, "bower.json")
+    parse_package_files(opts)
+    install_package_files(opts)
+  else
+    puts "Source not recognized.".red
+  end
+end
+
+def fetch_bower_config(opts, bower_fn)
+  opts[:bower_url] = "#{opts[:repo_url]}/#{bower_fn}"
   # get bower config
-  repo_url = "https://raw.github.com/#{opts[:github]}/#{opts[:tag] || opts[:branch] || "master"}/bower.json"
-  bower_json = HTTParty.get(repo_url).parsed_response
-  puts bower_json
+  resp = HTTParty.get(opts[:bower_url])
+  if resp.code.to_i == 200
+    bower = JSON.parse(resp.body)
+    puts bower if DEBUG
+    opts[:bower] = bower
+  elsif bower_fn == "bower.json"
+    puts "Could not fetch Bower file (#{bower_fn}).".red
+    fetch_bower_config(opts, "component.json")
+  else
+    puts "Could not fetch Bower file (#{bower_fn}).".red
+    opts[:status] = :error
+    exit
+    return
+  end
+end
+
+# determine which included files are javascripts, stylesheets, fonts, images
+def parse_package_files(opts)
+  opts[:javascripts] = []
+  opts[:stylesheets] = []
+  opts[:images] = []
+  opts[:fonts] = []
+
+  rel_fns = opts[:bower]["main"]
+  rel_fns = [rel_fns] if rel_fns.is_a?(String)
+  rel_fns.each do |rf|
+    ft = parse_file_type(rf)
+    fp = "#{opts[:repo_url]}/#{rf}".gsub("/./", "/")
+    fo = {path: fp, base: File.basename(fp)}
+    case ft
+    when :javascript
+      opts[:javascripts] << fo
+    when :stylesheet
+      opts[:stylesheets] << fo
+    when :image
+      opts[:images] << fo
+    when :font
+      opts[:fonts] << fo
+    else
+      puts "Could not determine type of file #{fp}. Placing in images...".red
+      opts[:images] << fo
+    end
+  end
+end
+
+def install_package_files(opts)
+  types = [:javascripts, :stylesheets, :images, :fonts]
+  types.each do |asset_type|
+    out_dir = opts[:paths][asset_type]
+    FileUtils.remove_dir(out_dir) if File.directory?(out_dir)
+
+    files = opts[asset_type]
+    next if files.empty?
+    puts "+ #{files.count} #{asset_type}"
+
+    # init dirs
+    FileUtils.mkdir_p(out_dir)
+
+    # install files
+    files.each do |fo|
+      file = fo[:path]
+      base = fo[:base]
+      puts file if DEBUG
+      print "  - #{base}... "
+      resp = HTTParty.get(file)
+      if resp.code.to_i == 200
+        out_file = "#{out_dir}/#{base}"
+        File.open(out_file, "wb") do |f|
+          f.write resp.body
+        end
+        puts "done".green
+        fo[:state] = :installed
+      else
+        puts "error".red
+        fo[:state] = :error
+      end
+    end
+
+  end
+
+  # build javascript manifest
+  build_package_javascript_manifest(opts)
+  build_package_stylesheet_manifest(opts)
+end
+
+## MANIFESTS
+
+def build_package_javascript_manifest(opts)
+  return if opts[:javascripts].empty?
+  print "- building package javascript manifest... "
+
+  str = ""
+  opts[:javascripts].each do |fo|
+    next if fo[:state] == :error
+    str << "//= require ./#{fo[:base]}\n"
+  end
+  man_fn = File.join(opts[:paths][:javascripts], "asset-manifest.js")
+  File.open(man_fn, "w") {|f| f.write str}
+  puts "done".green
+end
+
+def build_package_stylesheet_manifest(opts)
+  return if opts[:stylesheets].empty?
+  print "- building package stylesheet manifest... "
+
+  str = "/*\n"
+  opts[:stylesheets].each do |fo|
+    next if fo[:state] == :error
+    str << "*= require ./#{fo[:base]}\n"
+  end
+  str << "*/"
+  man_fn = File.join(opts[:paths][:stylesheets], "asset-manifest.css")
+  File.open(man_fn, "w") {|f| f.write str}
+  puts "done".green
+
+end
+
+def build_javascript_manifest
+  print "Building javascript manifest... ".yellow
+  man_fn = File.join(Dir.pwd, @assets_path, "javascripts", "ramba", "ramba.js")
+  FileUtils.mkdir_p File.dirname(man_fn)
+
+  str = "// Ramba Javascript Manifest\n"
+  @packages.each do |name, opts|
+    # check if manifest file exists
+    pfn = File.join(opts[:paths][:javascripts], "asset-manifest.js")
+    if File.exists? pfn
+      str << "//= require ./#{name}/asset-manifest\n"
+    end
+  end
+  File.open(man_fn, "w") {|f| f.write str}
+  puts "done".green
+end
+
+def build_stylesheet_manifest
+  print "Building stylesheet manifest... ".yellow
+  man_fn = File.join(Dir.pwd, @assets_path, "stylesheets", "ramba", "ramba.css")
+  FileUtils.mkdir_p File.dirname(man_fn)
+
+  str = "/* Ramba Stylesheet Manifest\n"
+  @packages.each do |name, opts|
+    # check if manifest file exists
+    pfn = File.join(opts[:paths][:stylesheets], "asset-manifest.css")
+    if File.exists? pfn
+      str << "*= require ./#{name}/asset-manifest\n"
+    end
+  end
+  str << "*/"
+  File.open(man_fn, "w") {|f| f.write str}
+  puts "done".green
+end
+
+
+## HELPER METHODS
+
+def parse_file_type(fn)
+  ext = File.extname(fn).downcase
+  js_exts = [".js", ".coffee"]
+  css_exts = [".css", ".sass", ".scss", ".less"]
+  img_exts = [".jpg", ".jpeg", ".gif", ".png", ".tiff", ".tif"]
+  font_exts = [".eot", ".svg", ".ttf", ".woff"]
+  if js_exts.include? ext
+    return :javascript
+  elsif css_exts.include? ext
+    return :stylesheet
+  elsif img_exts.include? ext
+    return :image
+  elsif font_exts.include? ext
+    return :font
+  end
 end
 
 ## DSL METHODS
 
 def package(name, opts={}, &block)
-  opts[:name] = name.to_s
-  @packages[name.to_s] = opts
+  name = name.to_s.strip.downcase
+  opts[:name] = name
+  @packages[name] = opts
 end
 
 process_command
