@@ -25,12 +25,18 @@ def process_command
   case command
   when :install
     download_packages(pkgs)
-    build_javascript_manifest
-    build_stylesheet_manifest
+    update_manifests
   when :manifests
-    build_javascript_manifest
-    build_stylesheet_manifest
+    update_manifests
+  when :clean
+    clean_packages
   end
+end
+
+def update_manifests
+  build_javascript_manifest
+  build_stylesheet_manifest
+  build_initializer
 end
 
 def load_asset_file
@@ -61,31 +67,55 @@ def download_packages(pkgs=nil)
   end
 end
 
+def clean_packages(pkgs=nil)
+  @packages.each do |name, opts|
+    next if pkgs && !pkgs.include?(name)
+    clean_package(opts)
+  end
+end
+
 def download_package(opts)
   puts "Installing #{opts[:name]}...".yellow
+  clean_package(opts)
+
   if opts[:github]
     opts[:repo_url] = "https://raw.github.com/#{opts[:github]}/#{opts[:tag] || opts[:branch] || "master"}"
-    fetch_bower_config(opts, "bower.json")
+    fetch_config(opts)
     parse_package_files(opts)
     install_package_files(opts)
+  elsif opts[:path]
+    opts[:repo_url] = File.expand_path(opts[:path])
+    if opts[:path_mode] == :live
+      # do nothing, will be handled by init file and manifests
+    else
+      fetch_config(opts)
+      parse_package_files(opts)
+      install_package_files(opts)
+    end
   else
     puts "Source not recognized.".red
   end
 end
 
-def fetch_bower_config(opts, bower_fn)
-  opts[:bower_url] = "#{opts[:repo_url]}/#{bower_fn}"
+def clean_package(opts)
+  opts[:paths].each do |key, path|
+    FileUtils.remove_dir(path) if File.exists?(path)
+  end
+end
+
+def fetch_config(opts, config_fn="bower.json")
+  opts[:bower_url] = "#{opts[:repo_url]}/#{config_fn}"
   # get bower config
-  resp = HTTParty.get(opts[:bower_url])
-  if resp.code.to_i == 200
-    bower = JSON.parse(resp.body)
+  body = fetch_text(opts[:bower_url])
+  if !body.nil?
+    bower = JSON.parse(body)
     puts bower if DEBUG
     opts[:bower] = bower
-  elsif bower_fn == "bower.json"
-    puts "Could not fetch Bower file (#{bower_fn}).".red
-    fetch_bower_config(opts, "component.json")
+  elsif config_fn == "bower.json"
+    puts "Could not fetch Bower file (#{config_fn}).".red
+    fetch_config(opts, "component.json")
   else
-    puts "Could not fetch Bower file (#{bower_fn}).".red
+    puts "Could not fetch Bower file (#{config_fn}).".red
     opts[:status] = :error
     exit
     return
@@ -138,14 +168,10 @@ def install_package_files(opts)
     files.each do |fo|
       file = fo[:path]
       base = fo[:base]
+      out_file = "#{out_dir}/#{base}"
       puts file if DEBUG
       print "  - #{base}... "
-      resp = HTTParty.get(file)
-      if resp.code.to_i == 200
-        out_file = "#{out_dir}/#{base}"
-        File.open(out_file, "wb") do |f|
-          f.write resp.body
-        end
+      if copy_file(file, out_file)
         puts "done".green
         fo[:state] = :installed
       else
@@ -200,10 +226,14 @@ def build_javascript_manifest
 
   str = "// Ramba Javascript Manifest\n"
   @packages.each do |name, opts|
-    # check if manifest file exists
-    pfn = File.join(opts[:paths][:javascripts], "asset-manifest.js")
-    if File.exists? pfn
-      str << "//= require ./#{name}/asset-manifest\n"
+    if opts[:path_mode] == :live
+      str << "//= require #{name}\n"
+    else
+      # check if manifest file exists
+      pfn = File.join(opts[:paths][:javascripts], "asset-manifest.js")
+      if File.exists? pfn
+        str << "//= require ./#{name}/asset-manifest\n"
+      end
     end
   end
   File.open(man_fn, "w") {|f| f.write str}
@@ -217,10 +247,14 @@ def build_stylesheet_manifest
 
   str = "/* Ramba Stylesheet Manifest\n"
   @packages.each do |name, opts|
-    # check if manifest file exists
-    pfn = File.join(opts[:paths][:stylesheets], "asset-manifest.css")
-    if File.exists? pfn
-      str << "*= require ./#{name}/asset-manifest\n"
+    if opts[:path_mode] == :live
+      str << "*= require #{name}\n"
+    else
+      # check if manifest file exists
+      pfn = File.join(opts[:paths][:stylesheets], "asset-manifest.css")
+      if File.exists? pfn
+        str << "*= require ./#{name}/asset-manifest\n"
+      end
     end
   end
   str << "*/"
@@ -228,6 +262,29 @@ def build_stylesheet_manifest
   puts "done".green
 end
 
+def build_initializer
+  # delete existing initializer
+  init_fn = File.join(Dir.pwd, "config", "initializers", "ramba.rb")
+  File.delete(init_fn) if File.exists?(init_fn)
+
+  str = ""
+  @packages.each do |name, opts|
+    if opts[:path_mode] == :live
+      str << "# #{opts[:name]}\n"
+      # add directories to sprockets
+      %w{javascripts stylesheets images fonts}.each do |dir|
+        path = File.join(opts[:path], "src", dir)
+        next if !File.directory?(File.expand_path(path))
+        str << "Rails.application.config.assets.paths << '#{path}'\n"
+      end
+    end
+  end
+
+  if str.length > 0
+    File.open(init_fn, "w") {|f| f.write(str)}
+    puts "Initializer written. Remember to restart your Rails server.".green
+  end
+end
 
 ## HELPER METHODS
 
@@ -246,6 +303,46 @@ def parse_file_type(fn)
   elsif font_exts.include? ext
     return :font
   end
+end
+
+# works for both online and offline files
+def fetch_text(url)
+  if is_local?(url)
+    puts "File #{url} is local" if DEBUG
+    if File.exists?(url)
+      return File.read(url)
+    else
+      return nil
+    end
+  else
+    resp = HTTParty.get(url)
+    if resp.code.to_i == 200
+      return resp.body
+    else
+      return nil
+    end
+  end
+end
+
+def copy_file(from, to)
+  if is_local?(from)
+    FileUtils.copy_file(from, to)
+    return true
+  else
+    resp = HTTParty.get(from)
+    if resp.code.to_i == 200
+      File.open(to, "wb") do |f|
+        f.write resp.body
+      end
+      return true
+    else
+      return false
+    end
+  end
+end
+
+def is_local?(url)
+  url.strip.downcase.match(/^http/) == nil
 end
 
 ## DSL METHODS
