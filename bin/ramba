@@ -273,7 +273,7 @@ def build_initializer
       str << "# #{opts[:name]}\n"
       # add directories to sprockets
       %w{javascripts stylesheets images fonts}.each do |dir|
-        path = File.join(opts[:path], "src", dir)
+        path = File.expand_path(File.join(opts[:path], "src", dir))
         next if !File.directory?(File.expand_path(path))
         str << "Rails.application.config.assets.paths << '#{path}'\n"
       end
