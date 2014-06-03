@@ -51,6 +51,7 @@ end
 
 def configure_packages
   @packages.each do |name, opts|
+    opts[:path] = File.expand_path(opts[:path]) if opts[:path]
     opts[:paths] = {}
     opts[:paths][:javascripts] = File.join(Dir.pwd, @assets_path, "javascripts", "ramba", opts[:name])
     opts[:paths][:stylesheets] = File.join(Dir.pwd, @assets_path, "stylesheets", "ramba", opts[:name])
@@ -84,7 +85,7 @@ def download_package(opts)
     parse_package_files(opts)
     install_package_files(opts)
   elsif opts[:path]
-    opts[:repo_url] = File.expand_path(opts[:path])
+    opts[:repo_url] = opts[:path]
     if opts[:path_mode] == :live
       # do nothing, will be handled by init file and manifests
     else
@@ -248,7 +249,7 @@ def build_stylesheet_manifest
   str = "/* Ramba Stylesheet Manifest\n"
   @packages.each do |name, opts|
     if opts[:path_mode] == :live
-      str << "*= require #{name}\n"
+      str << "*= require #{name}\n" if File.directory?(File.join(opts[:path], "src", "stylesheets"))
     else
       # check if manifest file exists
       pfn = File.join(opts[:paths][:stylesheets], "asset-manifest.css")
@@ -273,8 +274,8 @@ def build_initializer
       str << "# #{opts[:name]}\n"
       # add directories to sprockets
       %w{javascripts stylesheets images fonts}.each do |dir|
-        path = File.expand_path(File.join(opts[:path], "src", dir))
-        next if !File.directory?(File.expand_path(path))
+        path = File.join(opts[:path], "src", dir)
+        next if !File.directory?(path)
         str << "Rails.application.config.assets.paths << '#{path}'\n"
       end
     end
