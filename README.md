@@ -68,6 +68,10 @@ That's it. Your packages should now be installed and included. Once you have add
 	- path_mode : [:copy, :live]
 			:copy = copy files from source directory (default)
 			:live = include source directly (must follow directory format)
+	- javascript[s] : javascript file url, or array of urls
+	- stylesheet[s] : stylesheet file url, or array of urls
+	- images : array of image urls
+	- fonts : array of font urls
 
 ## Ramba Commands
 

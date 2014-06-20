@@ -9,6 +9,7 @@ require 'fileutils'
 @assets_path = "/app/assets"
 
 DEBUG = false
+ASSET_TYPES = [:javascripts, :stylesheets, :images, :fonts]
 
 def process_command
   command = ARGV[0].strip.downcase.to_sym
@@ -57,6 +58,26 @@ def configure_packages
     opts[:paths][:stylesheets] = File.join(Dir.pwd, @assets_path, "stylesheets", "ramba", opts[:name])
     opts[:paths][:images] = File.join(Dir.pwd, @assets_path, "images", "ramba", opts[:name])
     opts[:paths][:fonts] = File.join(Dir.pwd, @assets_path, "fonts", "ramba", opts[:name])
+    opts[:javascripts] ||= []
+    opts[:stylesheets] ||= []
+    opts[:images] ||= []
+    opts[:fonts] ||= []
+    opts[:javascripts] << opts[:javascript] if opts[:javascript]
+    opts[:stylesheets] << opts[:stylesheet] if opts[:stylesheet]
+
+    # use bower
+    if opts[:use_bower].nil?
+      if opts[:path_mode] == :live
+        opts[:use_bower] = false
+      elsif (!opts[:github].nil? || !opts[:path].nil?)
+        opts[:use_bower] = true
+      end
+    end
+
+    # preprocess any included files
+    ASSET_TYPES.each do |type|
+      opts[type] = opts[type].collect{|fp| expand_file_meta(fp)}
+    end
   end
 end
 
@@ -81,21 +102,20 @@ def download_package(opts)
 
   if opts[:github]
     opts[:repo_url] = "https://raw.github.com/#{opts[:github]}/#{opts[:tag] || opts[:branch] || "master"}"
-    fetch_config(opts)
-    parse_package_files(opts)
-    install_package_files(opts)
   elsif opts[:path]
     opts[:repo_url] = opts[:path]
-    if opts[:path_mode] == :live
-      # do nothing, will be handled by init file and manifests
-    else
-      fetch_config(opts)
-      parse_package_files(opts)
-      install_package_files(opts)
-    end
-  else
-    puts "Source not recognized.".red
   end
+
+  # do nothing if live mode, will be handled by init file and manifests
+  if opts[:path_mode] == :live
+    return
+  end
+
+  if opts[:use_bower] == true
+    fetch_config(opts)
+    parse_package_files(opts)
+  end
+  install_package_files(opts)
 end
 
 def clean_package(opts)
@@ -118,24 +138,18 @@ def fetch_config(opts, config_fn="bower.json")
   else
     puts "Could not fetch Bower file (#{config_fn}).".red
     opts[:status] = :error
-    exit
     return
   end
 end
 
 # determine which included files are javascripts, stylesheets, fonts, images
 def parse_package_files(opts)
-  opts[:javascripts] = []
-  opts[:stylesheets] = []
-  opts[:images] = []
-  opts[:fonts] = []
-
   rel_fns = opts[:bower]["main"]
   rel_fns = [rel_fns] if rel_fns.is_a?(String)
   rel_fns.each do |rf|
-    ft = parse_file_type(rf)
     fp = "#{opts[:repo_url]}/#{rf}".gsub("/./", "/")
-    fo = {path: fp, base: File.basename(fp)}
+    fo = expand_file_meta(fp)
+    ft = fo[:type]
     case ft
     when :javascript
       opts[:javascripts] << fo
@@ -153,8 +167,7 @@ def parse_package_files(opts)
 end
 
 def install_package_files(opts)
-  types = [:javascripts, :stylesheets, :images, :fonts]
-  types.each do |asset_type|
+  ASSET_TYPES.each do |asset_type|
     out_dir = opts[:paths][asset_type]
     FileUtils.remove_dir(out_dir) if File.directory?(out_dir)
 
@@ -344,6 +357,10 @@ end
 
 def is_local?(url)
   url.strip.downcase.match(/^http/) == nil
+end
+
+def expand_file_meta(url)
+  {path: url, base: File.basename(url), type: parse_file_type(url)}
 end
 
 ## DSL METHODS
