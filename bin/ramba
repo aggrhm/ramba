@@ -30,7 +30,7 @@ def process_command
   when :manifests
     update_manifests
   when :clean
-    clean_packages
+    clean_packages(pkgs)
   end
 end
 
