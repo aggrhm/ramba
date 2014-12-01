@@ -150,6 +150,13 @@ def parse_package_files(opts)
     fp = "#{opts[:repo_url]}/#{rf}".gsub("/./", "/")
     fo = expand_file_meta(fp)
     ft = fo[:type]
+    # check if file excluded
+    if !opts[:exclude].nil?
+      if File.fnmatch?(opts[:exclude], fo[:base])
+        puts "Excluding #{fo[:base]}".red
+        next
+      end
+    end
     case ft
     when :javascript
       opts[:javascripts] << fo
