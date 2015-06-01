@@ -64,12 +64,13 @@ def configure_packages
     opts[:fonts] ||= []
     opts[:javascripts] << opts[:javascript] if opts[:javascript]
     opts[:stylesheets] << opts[:stylesheet] if opts[:stylesheet]
+    opts[:module] ||= 'index'
 
     # use bower
     if opts[:use_bower].nil?
       if opts[:path_mode] == :live
         opts[:use_bower] = false
-      elsif (!opts[:github].nil? || !opts[:path].nil?)
+      elsif (!opts[:github].nil? || !opts[:path].nil? || !opts[:repo_url].nil?)
         opts[:use_bower] = true
       end
     end
@@ -192,7 +193,7 @@ def install_package_files(opts)
       out_file = "#{out_dir}/#{base}"
       puts file if DEBUG
       print "  - #{base}... "
-      if copy_file(file, out_file)
+      if copy_file(file, out_file, {link: (opts[:path_mode] == :link)})
         puts "done".green
         fo[:state] = :installed
       else
@@ -242,11 +243,14 @@ end
 
 def build_javascript_manifest
   print "Building javascript manifest... ".yellow
-  man_fn = File.join(Dir.pwd, @assets_path, "javascripts", "ramba", "index.js")
-  FileUtils.mkdir_p File.dirname(man_fn)
+  man_dir = File.join(Dir.pwd, @assets_path, "javascripts", "ramba")
+  FileUtils.mkdir_p man_dir
 
-  str = "// Ramba Javascript Manifest\n"
+  mfs = {}
   @packages.each do |name, opts|
+    mdl = opts[:module]
+    mfs[mdl] ||= "// Ramba Javascript Manifest\n"
+    str = mfs[mdl]
     if opts[:path_mode] == :live
       str << "//= require #{name}\n"
     else
@@ -257,17 +261,23 @@ def build_javascript_manifest
       end
     end
   end
-  File.open(man_fn, "w") {|f| f.write str}
+  mfs.each do |mdl, str|
+    man_fn = File.join(man_dir, "#{mdl}.js")
+    File.open(man_fn, "w") {|f| f.write str}
+  end
   puts "done".green
 end
 
 def build_stylesheet_manifest
   print "Building stylesheet manifest... ".yellow
-  man_fn = File.join(Dir.pwd, @assets_path, "stylesheets", "ramba", "index.css")
-  FileUtils.mkdir_p File.dirname(man_fn)
+  man_dir = File.join(Dir.pwd, @assets_path, "stylesheets", "ramba")
+  FileUtils.mkdir_p man_dir
 
-  str = "/* Ramba Stylesheet Manifest\n"
+  mfs = {}
   @packages.each do |name, opts|
+    mdl = opts[:module]
+    mfs[mdl] ||= "/* Ramba Stylesheet Manifest\n"
+    str = mfs[mdl]
     if opts[:path_mode] == :live
       str << "*= require #{name}\n" if File.directory?(File.join(opts[:path], "src", "stylesheets"))
     else
@@ -278,8 +288,11 @@ def build_stylesheet_manifest
       end
     end
   end
-  str << "*/"
-  File.open(man_fn, "w") {|f| f.write str}
+  mfs.each do |mdl, str|
+    str << "*/"
+    man_fn = File.join(man_dir, "#{mdl}.css")
+    File.open(man_fn, "w") {|f| f.write str}
+  end
   puts "done".green
 end
 
@@ -345,9 +358,13 @@ def fetch_text(url)
   end
 end
 
-def copy_file(from, to)
+def copy_file(from, to, opts={link: false})
   if is_local?(from)
-    FileUtils.copy_file(from, to)
+    if opts[:link]
+      FileUtils.ln_s(from, to)
+    else
+      FileUtils.copy_file(from, to)
+    end
     return true
   else
     resp = HTTParty.get(from)
